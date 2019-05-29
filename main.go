@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"path"
 	"syscall"
 )
+
+var storeDir = "/tmp/blastCacheStore"
 
 var blastTools = map[string]string{
 	"blastn":   "/usr/bin/blastn",
@@ -19,10 +22,6 @@ var blastTools = map[string]string{
 	"tblastx":  "/usr/bin/tblastx",
 	"blastall": "/usr/local/bin/blastall",
 }
-
-/*
-BLASTDB=tmp/blastdb/ ./myblast /usr/local/bin/blastall -a 2 -b 150 -v 150 -e 1e-10 -p blastn -F F -r 2 -W 11 -q 3 -I T -d tmp/blastdb/public-2019-05-10 -m9 -i tmp/blastdb/query.fa
-*/
 
 // setup the path for the blast tools
 func init() {
@@ -71,6 +70,55 @@ func runCommand(name string, args ...string) (stdout string, stderr string, exit
 	return stdout, stderr, exitCode
 }
 
+func findInStore(key string) (output string, warnings string, err error) {
+
+	if key == "" || len(key) < 10 {
+		return "", "", errors.New("invalid key given")
+	}
+
+	cacheDir := fmt.Sprintf("%s/%s/%s/%s", storeDir, key[0:3], key[3:6], key)
+	//fmt.Println("cache dir: ", cacheDir)
+	// TODO
+	// XXXX - check if cahce dir exists
+	/*if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		return "", "", err
+	}*/
+
+	if _, err := os.Stat(cacheDir); os.IsNotExist(err) {
+		return "", "", nil
+	}
+
+	blastOutput, err := ioutil.ReadFile(cacheDir + "/output.blast")
+	blastErrors, err := ioutil.ReadFile(cacheDir + "/errors.blast")
+
+	return string(blastOutput), string(blastErrors), nil
+}
+
+func addToStore(key string, blastOutput string, blastErrors string) (err error) {
+
+	if key == "" || len(key) < 10 {
+		return errors.New("invalid key given")
+	}
+
+	cacheDir := fmt.Sprintf("%s/%s/%s/%s", storeDir, key[0:3], key[3:6], key)
+	//fmt.Println("cache dir: ", cacheDir)
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		return err
+	}
+
+	// func WriteFile(filename string, data []byte, perm os.FileMode) error
+
+	if err := ioutil.WriteFile(cacheDir+"/output.blast", []byte(blastOutput), 0644); err != nil {
+		return err
+	}
+
+	if err := ioutil.WriteFile(cacheDir+"/errors.blast", []byte(blastErrors), 0644); err != nil {
+		return err
+	}
+
+	return err
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "Error. missing arguments")
@@ -93,11 +141,12 @@ func main() {
 	if len(os.Args) > 1 {
 		var idx int
 		for i, a := range os.Args[1:] {
-			//fmt.Printf(" %d\t%s\n", i, a)
+			//fmt.Fprintf(os.Stderr, " %d\t%d\t%s\n", i, idx, a)
 			toolArgs = append(toolArgs, a)
 			if a == "-i" || a == "-query" {
 				idx = i + 2
-			} else {
+			} else if i+1 != idx { // skip the filename
+				//fmt.Fprintf(os.Stderr, "\tadded %d\t%d\t%s\n", i, idx, a)
 				hasher.Write([]byte(a))
 			}
 		}
@@ -107,30 +156,43 @@ func main() {
 			inputFile = os.Args[idx]
 			fileData, err := ioutil.ReadFile(inputFile) // just pass the file name
 			if err != nil {
-				fmt.Println(err)
+				fmt.Fprint(os.Stderr, err)
 				os.Exit(1)
 			}
 			hasher.Write(fileData)
 		} else {
-			fmt.Println("query file not specified")
+			fmt.Fprint(os.Stderr, "query file not specified")
 			os.Exit(1)
 		}
 	}
 
-	// find result in cache
 	// build key
 
-	fmt.Println("input: ", inputFile)
+	//fmt.Println("input: ", inputFile)
 	cacheKey := fmt.Sprintf("%x", hasher.Sum(nil))
-	fmt.Println("cache_key: ", cacheKey)
+	//fmt.Fprintf(os.Stderr, "cache_key: %s\n", cacheKey)
 
-	return
+	//return
 
-	stOut, stErr, exitCode := runCommand(blastTools[tool], toolArgs...)
-	fmt.Fprintf(os.Stderr, stErr)
-	fmt.Fprintf(os.Stdout, stOut)
+	// find result in cache
+	blastOutput, blastErrors, err := findInStore(cacheKey)
+	/*fmt.Println("blastOutput: ", blastOutput)
+	fmt.Println("blastErrors:", blastErrors)
+	fmt.Println("err:", err)
+	*/
 
-	// store results in our cache
+	exitCode := 0
+	if err != nil || blastOutput == "" {
+		blastOutput, blastErrors, exitCode = runCommand(blastTools[tool], toolArgs...)
+
+		// add to cache
+		if exitCode == 0 {
+			addToStore(cacheKey, blastOutput, blastErrors)
+		}
+	}
+
+	fmt.Fprint(os.Stdout, blastOutput)
+	fmt.Fprint(os.Stderr, blastErrors)
 
 	os.Exit(exitCode)
 }

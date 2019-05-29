@@ -3,7 +3,7 @@
 
 containerid=""
 if [[ -n $1 ]]; then
-    containerid=$(docker ps -q| grep 6776234a403e)
+    containerid=$(docker ps -q| grep $1)
 fi
 
 for tool in blastn blastp blastx tblastn tblastp; do

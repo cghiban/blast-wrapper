@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha256"
+	"crypto/md5"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
+	"log"
 	"os"
 	"os/exec"
 	"path"
@@ -15,12 +17,12 @@ import (
 var storeDir = "/tmp/blastCacheStore"
 
 var blastTools = map[string]string{
-	"blastn":   "/usr/bin/blastn",
-	"blastp":   "/usr/bin/blastp",
-	"blastx":   "/usr/bin/blastx",
-	"tblastn":  "/usr/bin/tblastn",
-	"tblastx":  "/usr/bin/tblastx",
-	"blastall": "/usr/local/bin/blastall",
+	"blastn":  "/usr/bin/blastn",
+	"blastp":  "/usr/bin/blastp",
+	"blastx":  "/usr/bin/blastx",
+	"tblastn": "/usr/bin/tblastn",
+	"tblastx": "/usr/bin/tblastx",
+	//"blastall": "/usr/local/bin/blastall",
 }
 
 // setup the path for the blast tools
@@ -119,6 +121,55 @@ func addToStore(key string, blastOutput string, blastErrors string) (err error) 
 	return err
 }
 
+func buildHashKey(args []string) string {
+	input := ""
+	idx := 0
+	// 1st pass, find the input
+	for i := 1; i < len(args); i++ {
+		if args[i] == "-query" {
+			idx = i
+			break
+		}
+	}
+
+	if idx > 0 && idx < (len(args)-1) && args[idx+1] != "" {
+		//fmt.Printf("input file=%s\n", args[idx+1])
+		input = args[idx+1]
+	} else {
+		fmt.Print("Error: missing input file")
+		os.Exit(1)
+	}
+
+	if _, err := os.Stat(input); os.IsNotExist(err) {
+		fmt.Println("Error: Input file not found")
+		os.Exit(1)
+	} else if err != nil {
+		fmt.Println("Error:", err)
+		os.Exit(1)
+	}
+	//fmt.Printf("found input [%s] at index [%d]\n", input, idx)
+
+	// 2nd pass, compute hash key
+	h := md5.New()
+	for i := 1; i < len(args); i++ {
+		if i != idx && i != (idx+1) {
+			io.WriteString(h, args[i])
+		}
+	}
+	// now add the file
+	f, err := os.Open(input)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+
+	if _, err := io.Copy(h, f); err != nil {
+		log.Fatal(err)
+	}
+
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "Error. missing arguments")
@@ -134,45 +185,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	var inputFile string
-	hasher := sha256.New()
-
 	toolArgs := []string{}
-	if len(os.Args) > 1 {
-		var idx int
-		for i, a := range os.Args[1:] {
-			//fmt.Fprintf(os.Stderr, " %d\t%d\t%s\n", i, idx, a)
-			toolArgs = append(toolArgs, a)
-			if a == "-i" || a == "-query" {
-				idx = i + 2
-			} else if i+1 != idx { // skip the filename
-				//fmt.Fprintf(os.Stderr, "\tadded %d\t%d\t%s\n", i, idx, a)
-				hasher.Write([]byte(a))
-			}
-		}
-
-		// add the contents of the input file to our hash
-		if idx < len(os.Args) {
-			inputFile = os.Args[idx]
-			fileData, err := ioutil.ReadFile(inputFile) // just pass the file name
-			if err != nil {
-				fmt.Fprint(os.Stderr, err)
-				os.Exit(1)
-			}
-			hasher.Write(fileData)
-		} else {
-			fmt.Fprint(os.Stderr, "query file not specified")
-			os.Exit(1)
-		}
+	for _, a := range os.Args[1:] {
+		toolArgs = append(toolArgs, a)
 	}
 
-	// build key
-
-	//fmt.Println("input: ", inputFile)
-	cacheKey := fmt.Sprintf("%x", hasher.Sum(nil))
-	//fmt.Fprintf(os.Stderr, "cache_key: %s\n", cacheKey)
-
-	//return
+	cacheKey := buildHashKey(os.Args)
+	/*
+		fmt.Fprintf(os.Stderr, "cache_key: %s\n", cacheKey)
+		fmt.Fprintln(os.Stderr, toolArgs)
+		return
+	*/
 
 	// find result in cache
 	blastOutput, blastErrors, err := findInStore(cacheKey)

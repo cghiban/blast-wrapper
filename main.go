@@ -80,16 +80,11 @@ func findInStore(key string) (output string, warnings string, err error) {
 
 	cacheDir := fmt.Sprintf("%s/%s/%s/%s", storeDir, key[0:3], key[3:6], key)
 	//fmt.Println("cache dir: ", cacheDir)
-	// TODO
-	// XXXX - check if cahce dir exists
-	/*if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		return "", "", err
-	}*/
-
 	if _, err := os.Stat(cacheDir); os.IsNotExist(err) {
 		return "", "", nil
 	}
 
+	// is is safe to ignore these errors?
 	blastOutput, err := ioutil.ReadFile(cacheDir + "/output.blast")
 	blastErrors, err := ioutil.ReadFile(cacheDir + "/errors.blast")
 
@@ -109,7 +104,6 @@ func addToStore(key string, blastOutput string, blastErrors string) (err error) 
 	}
 
 	// func WriteFile(filename string, data []byte, perm os.FileMode) error
-
 	if err := ioutil.WriteFile(cacheDir+"/output.blast", []byte(blastOutput), 0644); err != nil {
 		return err
 	}
@@ -121,7 +115,7 @@ func addToStore(key string, blastOutput string, blastErrors string) (err error) 
 	return err
 }
 
-func buildHashKey(args []string) string {
+func buildHashKey(args []string) (key string, err error) {
 	input := ""
 	idx := 0
 	// 1st pass, find the input
@@ -136,23 +130,29 @@ func buildHashKey(args []string) string {
 		//fmt.Printf("input file=%s\n", args[idx+1])
 		input = args[idx+1]
 	} else {
-		fmt.Print("Error: missing input file")
-		os.Exit(1)
+		//fmt.Print("Error: missing input file")
+		return "", errors.New("missing input file")
 	}
 
 	if _, err := os.Stat(input); os.IsNotExist(err) {
 		fmt.Println("Error: Input file not found")
-		os.Exit(1)
+		return "", errors.New("missing input file")
 	} else if err != nil {
 		fmt.Println("Error:", err)
-		os.Exit(1)
+		return "", errors.New("missing input file")
 	}
 	//fmt.Printf("found input [%s] at index [%d]\n", input, idx)
 
 	// 2nd pass, compute hash key
+	// also, don't compute the key if -h or --help flags are found
 	h := md5.New()
+
+	// also include the tool when computing the hash
+	io.WriteString(h, path.Base(args[0]))
 	for i := 1; i < len(args); i++ {
-		if i != idx && i != (idx+1) {
+		if args[i] == "-h" || args[i] == "-help" || args[i] == "--help" {
+			return "", errors.New("-help flag was set")
+		} else if i != idx && i != (idx+1) {
 			io.WriteString(h, args[i])
 		}
 	}
@@ -167,14 +167,12 @@ func buildHashKey(args []string) string {
 		log.Fatal(err)
 	}
 
-	return fmt.Sprintf("%x", h.Sum(nil))
+	hashKey := fmt.Sprintf("%x", h.Sum(nil))
+	return hashKey, nil
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Error. missing arguments")
-		os.Exit(1)
-	}
+
 	tool := path.Base(os.Args[0])
 	if tool == "main" {
 		tool = "blastn"
@@ -185,12 +183,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	toolArgs := []string{}
-	for _, a := range os.Args[1:] {
-		toolArgs = append(toolArgs, a)
-	}
+	toolArgs := os.Args[1:]
 
-	cacheKey := buildHashKey(os.Args)
+	// when returned err is not nil, we pass all the args to the blast tool
+	cacheKey, err := buildHashKey(os.Args)
+
 	/*
 		fmt.Fprintf(os.Stderr, "cache_key: %s\n", cacheKey)
 		fmt.Fprintln(os.Stderr, toolArgs)

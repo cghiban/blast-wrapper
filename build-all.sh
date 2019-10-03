@@ -7,7 +7,8 @@ if [[ -n $1 ]]; then
 fi
 
 for tool in blastn blastp blastx tblastn tblastp; do
-    go build -o ./$tool main.go 
+    go build -o ./$tool main.go
+    strip ./$tool
     ls -l ./$tool
 done
 
